@@ -124,16 +124,6 @@ export default function App() {
     extractedSkills: string[];
   } | null>(null);
 
-  const [aiInstance, setAiInstance] = useState<any>(null);
-
-  useEffect(() => {
-    // Initialize AI once
-    const key = (process.env as any).GEMINI_API_KEY;
-    if (key) {
-      setAiInstance(new GoogleGenAI({ apiKey: key }));
-    }
-  }, []);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -147,10 +137,12 @@ export default function App() {
     formData.append('resume', file);
 
     try {
+      console.log('Sending fetch request to /api/parse-resume...');
       const response = await fetch('/api/parse-resume', {
         method: 'POST',
         body: formData
       });
+      console.log('Response received:', response.status, response.statusText);
       const data = await response.json();
       if (data.text) {
         setResumeText(data.text);
@@ -159,7 +151,7 @@ export default function App() {
       }
     } catch (error) {
       console.error('Failed to parse resume:', error);
-      alert('Failed to connect to the server for PDF parsing. Please check if the server is running.');
+      alert(`Failed to connect to the server for PDF parsing: ${error instanceof Error ? error.message : String(error)}. Please check if the server is running.`);
     } finally {
       setIsParsing(false);
     }
@@ -185,16 +177,22 @@ export default function App() {
         
         Return ONLY the 3 bullet points.
       `;
-      const response = await aiInstance.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt
+      
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, model: "gemini-1.5-flash" })
       });
-      const text = response.text;
-      if (text) {
-        setFormData(prev => ({ ...prev, jobDescription: text.trim() }));
+      
+      const data = await response.json();
+      if (data.text) {
+        setFormData(prev => ({ ...prev, jobDescription: data.text.trim() }));
+      } else if (data.error) {
+        throw new Error(data.error);
       }
     } catch (error) {
       console.error('Smart extract failed:', error);
+      alert('Failed to extract core requirements. Please try again later.');
     } finally {
       setIsGenerating(false);
     }
@@ -240,36 +238,38 @@ export default function App() {
         4. **SPACING:** Ensure the letter has a clear structure: Salutation, 3-4 body paragraphs, and a Closing.
         5. **WORD COUNT:** The cover letter MUST be between 250 and 400 words.
         6. **SKILL EXTRACTION:** Extract at least 8-12 core technical and soft skills from the Job Description that the candidate possesses.
+
+        ### OUTPUT FORMAT
+        You MUST return the response as a JSON object with the following structure:
+        {
+          "letter": "string",
+          "matchScore": number,
+          "advice": "string",
+          "highlights": ["string"],
+          "extractedSkills": ["string"]
+        }
       `;
 
-      const response = await aiInstance.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              letter: { type: Type.STRING },
-              matchScore: { type: Type.NUMBER },
-              advice: { type: Type.STRING },
-              highlights: { type: Type.ARRAY, items: { type: Type.STRING } },
-              extractedSkills: { type: Type.ARRAY, items: { type: Type.STRING } }
-            },
-            required: ["letter", "matchScore", "advice", "highlights", "extractedSkills"]
-          }
-        }
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          prompt, 
+          model: "gemini-1.5-flash" 
+        })
       });
       
-      const text = response.text;
+      const data = await response.json();
       
-      if (!text) throw new Error('No response from AI');
+      if (!data.text) throw new Error(data.error || 'No response from AI');
       
-      const parsedData = JSON.parse(text);
+      // Sanitizing JSON response in case AI wraps it in markdown blocks
+      const cleanJson = data.text.replace(/```json\n?|\n?```/g, '').trim();
+      const parsedData = JSON.parse(cleanJson);
       setResult(parsedData);
     } catch (error) {
       console.error('Generation failed:', error);
-      alert('AI Generation failed. This might be due to a missing API key or complex input. Please ensure your GEMINI_API_KEY is set.');
+      alert('AI Generation failed. This usually happens if the GEMINI_API_KEY is not set correctly in your Vercel Environment Variables, or if the API limit has been reached.');
     } finally {
       setIsGenerating(false);
     }
